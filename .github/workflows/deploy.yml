@@ -1,0 +1,41 @@
+name: Deploy Network Config
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'configs/**'
+
+jobs:
+  sanity-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate FRR Config Syntax
+        run: |
+          for f in configs/*/frr.conf; do
+            echo "Checking $f..."
+            [ -s "$f" ] || (echo "ERROR: $f is empty" && exit 1)
+            grep -q "frr version" "$f" || (echo "ERROR: missing frr version" && exit 1)
+            echo "$f OK"
+          done
+
+  deploy:
+    needs: sanity-check
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy configs to lab devices
+        env:
+          SSH_KEY: ${{ secrets.LAB_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/lab_key
+          chmod 600 ~/.ssh/lab_key
+          declare -A DEVICE_IPS=([R1]="172.20.20.2" [R2]="172.20.20.4" [S1]="172.20.20.3")
+          for device in R1 R2 S1; do
+            ip="${DEVICE_IPS[$device]}"
+            scp -i ~/.ssh/lab_key -o StrictHostKeyChecking=no \
+              configs/$device/frr.conf root@$ip:/etc/frr/frr.conf
+            ssh -i ~/.ssh/lab_key -o StrictHostKeyChecking=no root@$ip "vtysh -b"
+          done
